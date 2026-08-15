@@ -2949,6 +2949,17 @@ xtensa_option_override (void)
   int regno;
   machine_mode mode;
 
+  /* The FDPIC user ABI is call0-only: functions are reached through
+     8-byte descriptors, and the entry registers a4-a6 carry the loadmap
+     and PT_DYNAMIC addresses.  Do this before defaulting the ABI so
+     that an explicit -mabi=windowed is rejected.  */
+  if (TARGET_FDPIC)
+    {
+      if (xtensa_windowed_abi == 1)
+	error ("%<-mabi=windowed%> is not supported with %<-mfdpic%>");
+      xtensa_windowed_abi = 0;
+    }
+
   if (xtensa_windowed_abi == -1)
     xtensa_windowed_abi = TARGET_WINDOWED_ABI_DEFAULT;
 

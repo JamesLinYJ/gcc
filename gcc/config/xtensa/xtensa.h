@@ -79,6 +79,8 @@ along with GCC; see the file COPYING3.  If not see
     builtin_define ("__XTENSA__");					\
     builtin_define (TARGET_WINDOWED_ABI ?				\
 		    "__XTENSA_WINDOWED_ABI__" : "__XTENSA_CALL0_ABI__");\
+    if (TARGET_FDPIC)							\
+      builtin_define ("__XTENSA_FDPIC__");				\
     builtin_define (TARGET_BIG_ENDIAN ? "__XTENSA_EB__" : "__XTENSA_EL__"); \
     if (!TARGET_HARD_FLOAT)						\
       builtin_define ("__XTENSA_SOFT_FLOAT__");				\
@@ -293,6 +295,10 @@ along with GCC; see the file COPYING3.  If not see
   (TARGET_WINDOWED_ABI \
    ? XTENSA_WINDOWED_HARD_FRAME_POINTER_REGNUM \
    : XTENSA_CALL0_HARD_FRAME_POINTER_REGNUM)
+
+/* In FDPIC mode the GOT value is loaded from the callee's function
+   descriptor around each call, so calls may clobber the PIC register.  */
+#define PIC_OFFSET_TABLE_REG_CALL_CLOBBERED TARGET_FDPIC
 
 #define XTENSA_WINDOWED_HARD_FRAME_POINTER_REGNUM (GP_REG_FIRST + 7)
 #define XTENSA_CALL0_HARD_FRAME_POINTER_REGNUM (GP_REG_FIRST + 15)

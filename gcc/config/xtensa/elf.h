@@ -48,6 +48,7 @@ along with GCC; see the file COPYING3.  If not see
   %{mno-longcalls:--no-longcalls} \
   %{mauto-litpools:--auto-litpools} \
   %{mno-auto-litpools:--no-auto-litpools} \
+  %{mfdpic:--fdpic} \
   %{mabi=windowed:--abi-windowed} \
   %{mabi=call0:--abi-call0}"
 
