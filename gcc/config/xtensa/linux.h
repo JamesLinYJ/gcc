@@ -54,6 +54,10 @@ along with GCC; see the file COPYING3.  If not see
 #undef LINK_SPEC
 #define LINK_SPEC \
  "%{shared:-shared} \
+  %{mfdpic:%{static-pie:%e-static-pie is not supported with -mfdpic} \
+    -z separate-code \
+    %{!shared:%{!r:%{!static:-pie}}} \
+    %{!static:-z now -z relro}} \
   %{!shared: \
     %{!static:%{!static-pie: \
       %{rdynamic:-export-dynamic} \
