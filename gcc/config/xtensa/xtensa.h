@@ -80,7 +80,13 @@ along with GCC; see the file COPYING3.  If not see
     builtin_define (TARGET_WINDOWED_ABI ?				\
 		    "__XTENSA_WINDOWED_ABI__" : "__XTENSA_CALL0_ABI__");\
     if (TARGET_FDPIC)							\
-      builtin_define ("__XTENSA_FDPIC__");				\
+      {									\
+	/* The libc ports (uClibc-ng, musl) select their FDPIC code	\
+	   paths with __FDPIC__.  Keep the Xtensa-specific macro as	\
+	   well.  */							\
+	builtin_define ("__FDPIC__");					\
+	builtin_define ("__XTENSA_FDPIC__");				\
+      }									\
     builtin_define (TARGET_BIG_ENDIAN ? "__XTENSA_EB__" : "__XTENSA_EL__"); \
     if (!TARGET_HARD_FLOAT)						\
       builtin_define ("__XTENSA_SOFT_FLOAT__");				\
@@ -789,7 +795,19 @@ typedef struct xtensa_args
    a MOVI and let the assembler relax it -- for the .init and .fini
    sections, the assembler knows to put the literal in the right
    place.  */
-#if defined(__XTENSA_WINDOWED_ABI__)
+#if defined(__FDPIC__)
+/* In FDPIC mode the call must go through the function descriptor:
+   the descriptor address is GOT-relative (A11 holds this module's
+   GOT), and the callee receives A11 unchanged because it is the same
+   module's GOT value.  */
+#define CRT_CALL_STATIC_FUNCTION(SECTION_OP, FUNC) \
+    asm (SECTION_OP "\n\
+	movi\ta0, " USER_LABEL_PREFIX #FUNC "@GOTOFFFUNCDESC\n\
+	add\ta0, a0, a11\n\
+	l32i\ta0, a0, 0\n\
+	callx0\ta0\n" \
+	TEXT_SECTION_ASM_OP);
+#elif defined(__XTENSA_WINDOWED_ABI__)
 #define CRT_CALL_STATIC_FUNCTION(SECTION_OP, FUNC) \
     asm (SECTION_OP "\n\
 	movi\ta8, " USER_LABEL_PREFIX #FUNC "\n\
