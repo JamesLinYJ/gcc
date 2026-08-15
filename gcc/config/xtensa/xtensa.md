@@ -33,6 +33,10 @@
   UNSPEC_NOP
   UNSPEC_PLT
   UNSPEC_FUNCDESC
+  UNSPEC_GOT
+  UNSPEC_GOTFUNCDESC
+  UNSPEC_GOTTLSDESC
+  UNSPEC_FDPIC_RESTORE
   UNSPEC_RET_ADDR
   UNSPEC_TPOFF
   UNSPEC_DTPOFF
@@ -2533,6 +2537,34 @@
   ""
   "")
 
+(define_expand "sym_GOT"
+  [(const (unspec [(match_operand:SI 0 "" "")] UNSPEC_GOT))]
+  ""
+  "")
+
+(define_expand "sym_GOTFUNCDESC"
+  [(const (unspec [(match_operand:SI 0 "" "")] UNSPEC_GOTFUNCDESC))]
+  ""
+  "")
+
+(define_expand "sym_GOTTLSDESC"
+  [(const (unspec [(match_operand:SI 0 "" "")] UNSPEC_GOTTLSDESC))]
+  ""
+  "")
+
+;; Keep restoration of the caller's GOT opaque until after register
+;; allocation.  A plain move can otherwise be deleted or moved across the
+;; call because the fixed FDPIC register is not an ordinary pseudo.
+(define_insn_and_split "restore_fdpic_register_after_call"
+  [(set (match_operand:SI 0 "register_operand" "=a")
+	(unspec:SI [(match_dup 0)
+		    (match_operand:SI 1 "nonimmediate_operand" "rU")]
+		   UNSPEC_FDPIC_RESTORE))]
+  "TARGET_FDPIC"
+  "#"
+  "&& reload_completed"
+  [(set (match_dup 0) (match_dup 1))])
+
 (define_expand "call"
   [(call (match_operand 0 "memory_operand" "")
 	 (match_operand 1 "" ""))]
@@ -2940,9 +2972,11 @@
 				  (match_operand:SI 2 "tls_symbol_operand" "")]
 				  UNSPEC_TLS_CALL))
 	      (match_operand 3 "" "i")))]
-  "TARGET_THREADPTR && HAVE_AS_TLS"
+  "TARGET_THREADPTR && (TARGET_FDPIC || HAVE_AS_TLS)"
 {
-  if (TARGET_WINDOWED_ABI)
+  if (TARGET_FDPIC)
+    return "callx0\t%1";
+  else if (TARGET_WINDOWED_ABI)
     return "callx8.tls %1, %2@TLSCALL";
   else
     return "callx0.tls %1, %2@TLSCALL";

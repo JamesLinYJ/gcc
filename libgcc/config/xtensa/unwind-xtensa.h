@@ -29,18 +29,30 @@
 
 #ifdef __FDPIC__
 
-/* Return the GOT value for the FDPIC module the unwind code belongs
-   to.  The ABI keeps the current module's GOT in A11 for the whole
-   function (A11 is callee-saved under FDPIC), so no lookup through
-   the function descriptor is needed.  */
+/* The loader can map text and data segments independently, so the GOT for
+   an arbitrary unwind record cannot be inferred from the currently running
+   module's A11.  Match the established ARM FDPIC contract: ask the loader
+   by PC when it provides the hook, and use A11 only as the static or
+   single-module fallback.  */
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+extern _Unwind_Ptr __attribute__((weak))
+__gnu_Unwind_Find_got (_Unwind_Ptr);
+#ifdef __cplusplus
+}
+#endif
 
 static inline _Unwind_Ptr _Unwind_gnu_Find_got (_Unwind_Ptr ptr)
 {
     _Unwind_Ptr res;
 
-    (void)ptr;
-    asm volatile ("mov %[result], a11"
-		  : [result] "=r" (res));
+    if (__gnu_Unwind_Find_got)
+	res = __gnu_Unwind_Find_got (ptr);
+    else
+	asm volatile ("mov %[result], a11"
+		      : [result] "=r" (res));
     return res;
 }
 

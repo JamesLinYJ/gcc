@@ -296,14 +296,20 @@ along with GCC; see the file COPYING3.  If not see
 /* Register to use for pushing function arguments.  */
 #define STACK_POINTER_REGNUM (GP_REG_FIRST + 1)
 
+/* A11 carries the module GOT base in the FDPIC call0 ABI.  It is fixed so
+   the register allocator cannot use the incoming value as a temporary, and
+   call-clobbered because an inter-module call installs the callee's GOT.  */
+#define XTENSA_FDPIC_REGNUM (GP_REG_FIRST + 11)
+#define PIC_OFFSET_TABLE_REGNUM \
+  (TARGET_FDPIC ? XTENSA_FDPIC_REGNUM : INVALID_REGNUM)
+
 /* Base register for access to local variables of the function.  */
 #define HARD_FRAME_POINTER_REGNUM \
   (TARGET_WINDOWED_ABI \
    ? XTENSA_WINDOWED_HARD_FRAME_POINTER_REGNUM \
    : XTENSA_CALL0_HARD_FRAME_POINTER_REGNUM)
 
-/* In FDPIC mode the GOT value is loaded from the callee's function
-   descriptor around each call, so calls may clobber the PIC register.  */
+/* Calls through an FDPIC descriptor temporarily install the callee's GOT.  */
 #define PIC_OFFSET_TABLE_REG_CALL_CLOBBERED TARGET_FDPIC
 
 #define XTENSA_WINDOWED_HARD_FRAME_POINTER_REGNUM (GP_REG_FIRST + 7)

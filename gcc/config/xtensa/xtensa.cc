@@ -120,6 +120,7 @@ static rtx gen_float_relational (enum rtx_code, rtx, rtx);
 static rtx gen_conditional_move (enum rtx_code, machine_mode, rtx, rtx);
 static struct machine_function * xtensa_init_machine_status (void);
 static rtx xtensa_legitimize_tls_address (rtx);
+static rtx xtensa_fdpic_load_got_symbol (rtx, bool);
 static rtx xtensa_legitimize_address (rtx, rtx, machine_mode);
 static bool xtensa_mode_dependent_address_p (const_rtx, addr_space_t);
 static bool xtensa_return_in_msb (const_tree);
@@ -1194,6 +1195,27 @@ xtensa_emit_move_sequence (rtx *operands, machine_mode mode)
 	  return 1;
 	}
 
+      if (TARGET_FDPIC && mode == Pmode)
+	{
+	  rtx base, addend;
+
+	  split_const (src, &base, &addend);
+	  if (SYMBOL_REF_P (base) || LABEL_REF_P (base))
+	    {
+	      src = xtensa_fdpic_load_got_symbol
+		(base, SYMBOL_REF_P (base) && SYMBOL_REF_FUNCTION_P (base));
+	      if (addend != const0_rtx)
+		{
+		  rtx sum = gen_reg_rtx (Pmode);
+
+		  emit_insn (gen_addsi3 (sum, src, addend));
+		  src = sum;
+		}
+	      emit_move_insn (dst, src);
+	      return 1;
+	    }
+	}
+
       if (!TARGET_CONST16 && !TARGET_AUTO_LITPOOLS
 	  && (! CONST_INT_P (src) || xtensa_postreload_completed_p ()))
 	{
@@ -2131,19 +2153,23 @@ xtensa_expand_call (int callop, rtx *operands)
   rtx call;
   rtx_insn *call_insn;
   rtx addr = XEXP (operands[callop], 0);
+  rtx initial_fdpic_reg = NULL_RTX;
   bool fdpic_call = false;
+
+  if (TARGET_FDPIC)
+    initial_fdpic_reg =
+      get_hard_reg_initial_val (Pmode, XTENSA_FDPIC_REGNUM);
 
   if (TARGET_FDPIC && SYMBOL_REF_P (addr)
       && (!SYMBOL_REF_LOCAL_P (addr) || SYMBOL_REF_EXTERNAL_P (addr)))
     {
-      /* In FDPIC mode calls to external functions go through the
-	 callee's 8-byte function descriptor: load the descriptor
-	 address from a literal, then the entry point from the
-	 descriptor before the indirect call.  */
-      rtx desc = copy_to_mode_reg (Pmode, gen_sym_FUNCDESC (addr));
+      /* The literal contains only a link-time GOT slot offset.  The slot
+	 and descriptor live in writable data, so neither startup nor the
+	 dynamic loader ever needs to patch executable Flash.  */
+      rtx desc = xtensa_fdpic_load_got_symbol (addr, true);
 
       addr = copy_to_mode_reg (Pmode, gen_rtx_MEM (Pmode, desc));
-      emit_move_insn (gen_rtx_REG (Pmode, A11_REG),
+      emit_move_insn (gen_rtx_REG (Pmode, XTENSA_FDPIC_REGNUM),
 		      gen_rtx_MEM (Pmode, plus_constant (Pmode, desc, 4)));
       XEXP (operands[callop], 0) = addr;
       fdpic_call = true;
@@ -2156,7 +2182,7 @@ xtensa_expand_call (int callop, rtx *operands)
       rtx desc = addr;
 
       addr = copy_to_mode_reg (Pmode, gen_rtx_MEM (Pmode, desc));
-      emit_move_insn (gen_rtx_REG (Pmode, A11_REG),
+      emit_move_insn (gen_rtx_REG (Pmode, XTENSA_FDPIC_REGNUM),
 		      gen_rtx_MEM (Pmode, plus_constant (Pmode, desc, 4)));
       XEXP (operands[callop], 0) = addr;
       fdpic_call = true;
@@ -2188,10 +2214,22 @@ xtensa_expand_call (int callop, rtx *operands)
     {
       /* The GOT value loaded into a11 is live at the call site even
 	 though the call pattern itself does not reference it.  */
-      rtx use = gen_rtx_USE (VOIDmode, gen_rtx_REG (Pmode, A11_REG));
+      rtx fdpic_reg = gen_rtx_REG (Pmode, XTENSA_FDPIC_REGNUM);
+      rtx use = gen_rtx_USE (VOIDmode, fdpic_reg);
       CALL_INSN_FUNCTION_USAGE (call_insn) =
 	gen_rtx_EXPR_LIST (VOIDmode, use,
 			   CALL_INSN_FUNCTION_USAGE (call_insn));
+    }
+
+  if (TARGET_FDPIC)
+    {
+      rtx fdpic_reg = gen_rtx_REG (Pmode, XTENSA_FDPIC_REGNUM);
+
+      /* Every call is permitted to clobber A11.  Preserve the incoming GOT
+	 once per function and restore it through an opaque pattern so the
+	 operation cannot be optimized away or scheduled before the call.  */
+      emit_insn (gen_restore_fdpic_register_after_call
+		  (fdpic_reg, initial_fdpic_reg));
     }
 
   if (TARGET_WINDOWED_ABI)
@@ -2207,6 +2245,28 @@ xtensa_expand_call (int callop, rtx *operands)
       CALL_INSN_FUNCTION_USAGE (call_insn) =
 	gen_rtx_EXPR_LIST (Pmode, clob, CALL_INSN_FUNCTION_USAGE (call_insn));
     }
+}
+
+/* Load SYMBOL through this module's writable GOT.  Function symbols use a
+   GOTFUNCDESC slot and therefore produce a canonical descriptor pointer;
+   data symbols use a normal GOT slot.  The literal contains a link-time
+   slot offset rather than a runtime address, which is required by Flash
+   XIP and mirrors the established ARM FDPIC model.  */
+
+static rtx
+xtensa_fdpic_load_got_symbol (rtx symbol, bool function_p)
+{
+  rtx offset = gen_reg_rtx (Pmode);
+  rtx slot = gen_reg_rtx (Pmode);
+  rtx value = gen_reg_rtx (Pmode);
+  rtx got = gen_rtx_REG (Pmode, XTENSA_FDPIC_REGNUM);
+
+  emit_move_insn (offset, function_p
+			  ? gen_sym_GOTFUNCDESC (symbol)
+			  : gen_sym_GOT (symbol));
+  emit_insn (gen_addsi3 (slot, offset, got));
+  emit_move_insn (value, gen_rtx_MEM (Pmode, slot));
+  return value;
 }
 
 
@@ -2319,19 +2379,57 @@ xtensa_tls_module_base (void)
 static rtx_insn *
 xtensa_call_tls_desc (rtx sym, rtx *retp)
 {
-  rtx fn, arg, a_io;
+  rtx fn, arg, a_io, initial_fdpic_reg = NULL_RTX;
   rtx_insn *call_insn;
 
   start_sequence ();
   fn = gen_reg_rtx (Pmode);
-  arg = gen_reg_rtx (Pmode);
   a_io = gen_rtx_REG (Pmode, WINDOW_SIZE + 2);
 
-  emit_insn (gen_tls_func (fn, sym));
-  emit_insn (gen_tls_arg (arg, sym));
-  emit_move_insn (a_io, arg);
+  if (TARGET_FDPIC)
+    {
+      rtx got = gen_rtx_REG (Pmode, XTENSA_FDPIC_REGNUM);
+      rtx offset = gen_reg_rtx (Pmode);
+      rtx desc = gen_reg_rtx (Pmode);
+      rtx fn_desc = gen_reg_rtx (Pmode);
+
+      /* The link-time constant is an offset to an 8-byte TLS descriptor
+	 in this module's writable GOT.  The loader initializes the descriptor
+	 with a function descriptor pointer and its argument; executable Flash
+	 therefore never receives a dynamic TLS relocation.  */
+      initial_fdpic_reg =
+	get_hard_reg_initial_val (Pmode, XTENSA_FDPIC_REGNUM);
+      emit_move_insn (offset, gen_sym_GOTTLSDESC (sym));
+      emit_insn (gen_addsi3 (desc, offset, got));
+      emit_move_insn (a_io, desc);
+
+      /* A function pointer is a descriptor pointer under FDPIC.  Load both
+	 the resolver entry and its module GOT before the call.  The TLS
+	 resolver receives the TLS descriptor address in a2.  */
+      emit_move_insn (fn_desc, gen_rtx_MEM (Pmode, desc));
+      emit_move_insn (fn, gen_rtx_MEM (Pmode, fn_desc));
+      emit_move_insn (got,
+		      gen_rtx_MEM (Pmode,
+				   plus_constant (Pmode, fn_desc, 4)));
+    }
+  else
+    {
+      arg = gen_reg_rtx (Pmode);
+      emit_insn (gen_tls_func (fn, sym));
+      emit_insn (gen_tls_arg (arg, sym));
+      emit_move_insn (a_io, arg);
+    }
+
   call_insn = emit_call_insn (gen_tls_call (a_io, fn, sym, const1_rtx));
   use_reg (&CALL_INSN_FUNCTION_USAGE (call_insn), a_io);
+  if (TARGET_FDPIC)
+    {
+      rtx got = gen_rtx_REG (Pmode, XTENSA_FDPIC_REGNUM);
+
+      use_reg (&CALL_INSN_FUNCTION_USAGE (call_insn), got);
+      emit_insn (gen_restore_fdpic_register_after_call
+		  (got, initial_fdpic_reg));
+    }
 
   *retp = a_io;
   return end_sequence ();
@@ -2346,6 +2444,18 @@ xtensa_legitimize_tls_address (rtx x)
   rtx_insn *insns;
 
   dest = gen_reg_rtx (Pmode);
+
+  /* Every dynamic TLS model can use the same writable GOT descriptor in
+     FDPIC.  Keeping the legacy TLSFUNC/TLSARG literal-pair scheme would
+     require the loader to modify literal pools in executable Flash.  Local
+     exec remains a link-time TPOFF constant and needs no runtime write.  */
+  if (TARGET_FDPIC && model != TLS_MODEL_LOCAL_EXEC)
+    {
+      insns = xtensa_call_tls_desc (x, &ret);
+      emit_libcall_block (insns, dest, ret, x);
+      return dest;
+    }
+
   switch (model)
     {
     case TLS_MODEL_GLOBAL_DYNAMIC:
@@ -2390,6 +2500,27 @@ xtensa_legitimize_address (rtx x,
   /* Redirect if TLS addresses.  */
   if (xtensa_tls_symbol_p (x))
     return xtensa_legitimize_tls_address (x);
+
+  if (TARGET_FDPIC)
+    {
+      rtx base, addend;
+
+      split_const (x, &base, &addend);
+      if (SYMBOL_REF_P (base) || LABEL_REF_P (base))
+	{
+	  rtx addr = xtensa_fdpic_load_got_symbol
+	    (base, SYMBOL_REF_P (base) && SYMBOL_REF_FUNCTION_P (base));
+
+	  if (addend != const0_rtx)
+	    {
+	      rtx sum = gen_reg_rtx (Pmode);
+
+	      emit_insn (gen_addsi3 (sum, addr, addend));
+	      addr = sum;
+	    }
+	  return addr;
+	}
+    }
 
   /* Reject addresses that do not match '(PLUS (REG, IMM))'.  */
   if (GET_CODE (x) != PLUS)
@@ -2497,6 +2628,7 @@ xtensa_tls_referenced_p (rtx x)
 	  case UNSPEC_TLS_FUNC:
 	  case UNSPEC_TLS_ARG:
 	  case UNSPEC_TLS_CALL:
+	  case UNSPEC_GOTTLSDESC:
 	    iter.skip_subrtxes ();
 	    break;
 	  default:
@@ -3010,7 +3142,13 @@ xtensa_option_override (void)
     xtensa_strict_alignment = !XCHAL_UNALIGNED_LOAD_HW
       || !XCHAL_UNALIGNED_STORE_HW;
 
-  if (! TARGET_THREADPTR)
+  /* TARGET_HAVE_TLS initializes the target hook before command-line target
+     options have been parsed, so it cannot depend on TARGET_FDPIC there.
+     Enable native TLS here once both the selected ABI and the configured
+     Xtensa core are known.  */
+  if (TARGET_FDPIC && TARGET_THREADPTR)
+    targetm.have_tls = true;
+  else if (! TARGET_THREADPTR)
     targetm.have_tls = false;
 
   /* Use CONST16 in the absence of L32R.
@@ -3443,6 +3581,30 @@ xtensa_output_addr_const_extra (FILE *fp, rtx x)
 	      return true;
 	    }
 	  break;
+	case UNSPEC_GOT:
+	  if (TARGET_FDPIC)
+	    {
+	      output_addr_const (fp, XVECEXP (x, 0, 0));
+	      fputs ("@GOT", fp);
+	      return true;
+	    }
+	  break;
+	case UNSPEC_GOTFUNCDESC:
+	  if (TARGET_FDPIC)
+	    {
+	      output_addr_const (fp, XVECEXP (x, 0, 0));
+	      fputs ("@GOTFUNCDESC", fp);
+	      return true;
+	    }
+	  break;
+	case UNSPEC_GOTTLSDESC:
+	  if (TARGET_FDPIC)
+	    {
+	      output_addr_const (fp, XVECEXP (x, 0, 0));
+	      fputs ("@GOTTLSDESC", fp);
+	      return true;
+	    }
+	  break;
 	default:
 	  break;
 	}
@@ -3488,10 +3650,10 @@ xtensa_output_integer_literal_parts (FILE *file, rtx x, int size)
 static bool
 xtensa_assemble_integer (rtx x, unsigned int size, int aligned_p)
 {
-  if (size == UNITS_PER_WORD && aligned_p && TARGET_FDPIC
+  if (size == UNITS_PER_WORD && TARGET_FDPIC
       && SYMBOL_REF_P (x) && SYMBOL_REF_FUNCTION_P (x))
     {
-      fputs ("\t.word\t", asm_out_file);
+      fputs (integer_asm_op (size, aligned_p), asm_out_file);
       output_addr_const (asm_out_file, x);
       fputs ("@funcdesc\n", asm_out_file);
       return true;
@@ -5152,6 +5314,13 @@ xtensa_trampoline_init (rtx m_tramp, tree fndecl, rtx chain)
   int chain_off;
   int func_off;
 
+  if (TARGET_FDPIC)
+    {
+      sorry ("nested-function trampolines are not yet supported with "
+	     "%<-mfdpic%>");
+      return;
+    }
+
   if (TARGET_WINDOWED_ABI)
     {
       chain_off = use_call0 ? 12 : 8;
@@ -5447,12 +5616,13 @@ xtensa_conditional_register_usage (void)
   if (!TARGET_WINDOWED_ABI)
     fixed_regs[A0_REG] = 0;
 
-  /* In FDPIC mode A11 carries the called function's GOT value at
-     call sites.  Functions rely on it for their own GOT, so make it
-     callee-saved: the caller sets it up before each call and gets it
-     back unchanged afterwards.  */
+  /* In FDPIC mode A11 is the fixed, call-clobbered GOT register.  Call
+     expansion restores its incoming value after descriptor calls.  */
   if (TARGET_FDPIC)
-    call_used_regs[A11_REG] = 0;
+    {
+      fixed_regs[XTENSA_FDPIC_REGNUM] = 1;
+      call_used_regs[XTENSA_FDPIC_REGNUM] = 1;
+    }
 }
 
 /* Map hard register number to register class */
@@ -5527,8 +5697,11 @@ xtensa_asan_shadow_offset (void)
 static bool
 xtensa_function_ok_for_sibcall (tree decl ATTRIBUTE_UNUSED, tree exp ATTRIBUTE_UNUSED)
 {
-  /* Do not allow sibcalls when windowed registers ABI is in effect.  */
-  if (TARGET_WINDOWED_ABI)
+  /* An FDPIC tail call must install the callee's GOT after restoring the
+     caller frame.  Until there is a dedicated epilogue pattern, ordinary
+     sibling-call expansion loses descriptor word one and silently calls a
+     cross-module target with the caller's GOT.  */
+  if (TARGET_WINDOWED_ABI || TARGET_FDPIC)
     return false;
 
   return true;
@@ -5540,7 +5713,7 @@ xtensa_can_output_mi_thunk (const_tree thunk_fndecl ATTRIBUTE_UNUSED,
 			    HOST_WIDE_INT vcall_offset ATTRIBUTE_UNUSED,
 			    const_tree function ATTRIBUTE_UNUSED)
 {
-  if (TARGET_WINDOWED_ABI)
+  if (TARGET_WINDOWED_ABI || TARGET_FDPIC)
     return false;
 
   return true;
@@ -5621,7 +5794,10 @@ xtensa_delegitimize_address (rtx op)
 
     case UNSPEC:
       if (XINT (op, 1) == UNSPEC_PLT
-	  || XINT (op, 1) == UNSPEC_FUNCDESC)
+	  || XINT (op, 1) == UNSPEC_FUNCDESC
+	  || XINT (op, 1) == UNSPEC_GOT
+	  || XINT (op, 1) == UNSPEC_GOTFUNCDESC
+	  || XINT (op, 1) == UNSPEC_GOTTLSDESC)
 	return XVECEXP(op, 0, 0);
       break;
 
