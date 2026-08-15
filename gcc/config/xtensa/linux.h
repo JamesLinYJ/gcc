@@ -77,6 +77,14 @@ along with GCC; see the file COPYING3.  If not see
   %{mabi=windowed:--abi-windowed} \
   %{mabi=call0:--abi-call0}"
 
+/* uClibc's FDPIC executable entry point calls __self_reloc before normal
+   process startup.  Its freestanding implementation is installed as
+   crtreloc.o and must be part of every FDPIC executable, but not a shared
+   object or a conventional Xtensa link.  */
+#undef STARTFILE_SPEC
+#define STARTFILE_SPEC \
+ "%{mfdpic:%{!shared:crtreloc.o%s}} " GNU_USER_TARGET_STARTFILE_SPEC
+
 #undef LOCAL_LABEL_PREFIX
 #define LOCAL_LABEL_PREFIX	"."
 

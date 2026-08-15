@@ -2161,7 +2161,11 @@ xtensa_expand_call (int callop, rtx *operands)
       get_hard_reg_initial_val (Pmode, XTENSA_FDPIC_REGNUM);
 
   if (TARGET_FDPIC && SYMBOL_REF_P (addr)
-      && (!SYMBOL_REF_LOCAL_P (addr) || SYMBOL_REF_EXTERNAL_P (addr)))
+      && (TARGET_LONGCALLS
+	  || (SYMBOL_REF_DECL (addr)
+	      ? !targetm.binds_local_p (SYMBOL_REF_DECL (addr))
+	      : (!SYMBOL_REF_LOCAL_P (addr)
+		 || SYMBOL_REF_EXTERNAL_P (addr)))))
     {
       /* The literal contains only a link-time GOT slot offset.  The slot
 	 and descriptor live in writable data, so neither startup nor the
