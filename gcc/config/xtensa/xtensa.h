@@ -808,7 +808,8 @@ typedef struct xtensa_args
    module's GOT value.  */
 #define CRT_CALL_STATIC_FUNCTION(SECTION_OP, FUNC) \
     asm (SECTION_OP "\n\
-	movi\ta0, " USER_LABEL_PREFIX #FUNC "@GOTOFFFUNCDESC\n\
+	.literal .Lcrt_" #FUNC ", " USER_LABEL_PREFIX #FUNC "@GOTOFFFUNCDESC\n\
+	l32r\ta0, .Lcrt_" #FUNC "\n\
 	add\ta0, a0, a11\n\
 	l32i\ta0, a0, 0\n\
 	callx0\ta0\n" \

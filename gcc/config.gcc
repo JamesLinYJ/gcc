@@ -3621,6 +3621,9 @@ xtensa*-*-elf*)
 xtensa*-*-linux*)
 	tm_file="${tm_file} elfos.h gnu-user.h linux.h glibc-stdint.h xtensa/linux.h"
 	tmake_file="${tmake_file} xtensa/t-xtensa"
+	if test x$enable_fdpic = xyes; then
+		tm_defines="$tm_defines FDPIC_DEFAULT=1"
+	fi
 	;;
 xtensa*-*-uclinux*)
 	tm_file="${tm_file} elfos.h gnu-user.h linux.h glibc-stdint.h xtensa/uclinux.h"

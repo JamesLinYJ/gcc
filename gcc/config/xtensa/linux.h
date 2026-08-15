@@ -20,6 +20,16 @@ along with GCC; see the file COPYING3.  If not see
 
 #define TARGET_OS_CPP_BUILTINS() GNU_USER_TARGET_OS_CPP_BUILTINS()
 
+/* An FDPIC system toolchain must build its own target runtime libraries with
+   the same ABI as user code.  --enable-fdpic selects that system-wide
+   default, while -mno-fdpic remains available for freestanding components
+   such as the Linux kernel.  Make this a driver self-spec so cc1, assembler
+   and linker all observe one canonical option.  */
+#ifdef FDPIC_DEFAULT
+# undef DRIVER_SELF_SPECS
+# define DRIVER_SELF_SPECS "%{!mno-fdpic:-mfdpic}"
+#endif
+
 #undef SUBTARGET_CPP_SPEC
 #define SUBTARGET_CPP_SPEC "%{posix:-D_POSIX_SOURCE} %{pthread:-D_REENTRANT}"
 
