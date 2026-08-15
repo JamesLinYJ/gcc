@@ -25,11 +25,14 @@
   (A7_REG		7)
   (A8_REG		8)
   (A9_REG		9)
+  (A10_REG		10)
+  (A11_REG		11)
 ])
 
 (define_c_enum "unspec" [
   UNSPEC_NOP
   UNSPEC_PLT
+  UNSPEC_FUNCDESC
   UNSPEC_RET_ADDR
   UNSPEC_TPOFF
   UNSPEC_DTPOFF
@@ -2522,6 +2525,11 @@
 
 (define_expand "sym_PLT"
   [(const (unspec [(match_operand:SI 0 "" "")] UNSPEC_PLT))]
+  ""
+  "")
+
+(define_expand "sym_FUNCDESC"
+  [(const (unspec [(match_operand:SI 0 "" "")] UNSPEC_FUNCDESC))]
   ""
   "")
 

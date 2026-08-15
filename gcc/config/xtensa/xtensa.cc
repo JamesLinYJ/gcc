@@ -176,6 +176,7 @@ static bool xtensa_member_type_forces_blk (const_tree,
 					   machine_mode mode);
 
 static void xtensa_conditional_register_usage (void);
+static bool xtensa_assemble_integer (rtx, unsigned int, int);
 static unsigned int xtensa_hard_regno_nregs (unsigned int, machine_mode);
 static bool xtensa_hard_regno_mode_ok (unsigned int, machine_mode);
 static bool xtensa_modes_tieable_p (machine_mode, machine_mode);
@@ -215,6 +216,9 @@ static tree xtensa_handle_force_l32_attribute (tree *, tree, tree, int, bool *);
 
 #undef TARGET_ASM_ALIGNED_SI_OP
 #define TARGET_ASM_ALIGNED_SI_OP "\t.word\t"
+
+#undef TARGET_ASM_INTEGER
+#define TARGET_ASM_INTEGER xtensa_assemble_integer
 
 #undef TARGET_ASM_SELECT_RTX_SECTION
 #define TARGET_ASM_SELECT_RTX_SECTION  xtensa_select_rtx_section
@@ -2127,9 +2131,38 @@ xtensa_expand_call (int callop, rtx *operands)
   rtx call;
   rtx_insn *call_insn;
   rtx addr = XEXP (operands[callop], 0);
+  bool fdpic_call = false;
 
-  if (flag_pic && SYMBOL_REF_P (addr)
+  if (TARGET_FDPIC && SYMBOL_REF_P (addr)
       && (!SYMBOL_REF_LOCAL_P (addr) || SYMBOL_REF_EXTERNAL_P (addr)))
+    {
+      /* In FDPIC mode calls to external functions go through the
+	 callee's 8-byte function descriptor: load the descriptor
+	 address from a literal, then the entry point from the
+	 descriptor before the indirect call.  */
+      rtx desc = copy_to_mode_reg (Pmode, gen_sym_FUNCDESC (addr));
+
+      addr = copy_to_mode_reg (Pmode, gen_rtx_MEM (Pmode, desc));
+      emit_move_insn (gen_rtx_REG (Pmode, A11_REG),
+		      gen_rtx_MEM (Pmode, plus_constant (Pmode, desc, 4)));
+      XEXP (operands[callop], 0) = addr;
+      fdpic_call = true;
+    }
+  else if (TARGET_FDPIC && register_operand (addr, Pmode))
+    {
+      /* Indirect calls through a function pointer: the pointer is a
+	 function descriptor address, so the entry point and the
+	 callee's GOT value are loaded from the descriptor.  */
+      rtx desc = addr;
+
+      addr = copy_to_mode_reg (Pmode, gen_rtx_MEM (Pmode, desc));
+      emit_move_insn (gen_rtx_REG (Pmode, A11_REG),
+		      gen_rtx_MEM (Pmode, plus_constant (Pmode, desc, 4)));
+      XEXP (operands[callop], 0) = addr;
+      fdpic_call = true;
+    }
+  else if (flag_pic && SYMBOL_REF_P (addr)
+	   && (!SYMBOL_REF_LOCAL_P (addr) || SYMBOL_REF_EXTERNAL_P (addr)))
     addr = gen_sym_PLT (addr);
 
   if (!call_insn_operand (addr, VOIDmode))
@@ -2150,6 +2183,16 @@ xtensa_expand_call (int callop, rtx *operands)
     call = gen_rtx_SET (operands[0], call);
 
   call_insn = emit_call_insn (call);
+
+  if (fdpic_call)
+    {
+      /* The GOT value loaded into a11 is live at the call site even
+	 though the call pattern itself does not reference it.  */
+      rtx use = gen_rtx_USE (VOIDmode, gen_rtx_REG (Pmode, A11_REG));
+      CALL_INSN_FUNCTION_USAGE (call_insn) =
+	gen_rtx_EXPR_LIST (VOIDmode, use,
+			   CALL_INSN_FUNCTION_USAGE (call_insn));
+    }
 
   if (TARGET_WINDOWED_ABI)
     {
@@ -3392,6 +3435,14 @@ xtensa_output_addr_const_extra (FILE *fp, rtx x)
 	      return true;
 	    }
 	  break;
+	case UNSPEC_FUNCDESC:
+	  if (TARGET_FDPIC)
+	    {
+	      output_addr_const (fp, XVECEXP (x, 0, 0));
+	      fputs ("@funcdesc", fp);
+	      return true;
+	    }
+	  break;
 	default:
 	  break;
 	}
@@ -3413,12 +3464,40 @@ xtensa_output_integer_literal_parts (FILE *file, rtx x, int size)
     }
   else if (size == 4 || size == 2)
     {
-      output_addr_const (file, x);
+      if (size == 4 && TARGET_FDPIC
+	  && SYMBOL_REF_P (x) && SYMBOL_REF_FUNCTION_P (x))
+	{
+	  /* Function addresses are function descriptor addresses in
+	     the FDPIC ABI.  */
+	  output_addr_const (file, x);
+	  fputs ("@funcdesc", file);
+	}
+      else
+	output_addr_const (file, x);
     }
   else
     {
       gcc_unreachable();
     }
+}
+
+/* Implement TARGET_ASM_INTEGER.  In FDPIC mode function addresses are
+   function descriptor addresses, so word-sized function symbol
+   constants carry the @funcdesc relocation.  */
+
+static bool
+xtensa_assemble_integer (rtx x, unsigned int size, int aligned_p)
+{
+  if (size == UNITS_PER_WORD && aligned_p && TARGET_FDPIC
+      && SYMBOL_REF_P (x) && SYMBOL_REF_FUNCTION_P (x))
+    {
+      fputs ("\t.word\t", asm_out_file);
+      output_addr_const (asm_out_file, x);
+      fputs ("@funcdesc\n", asm_out_file);
+      return true;
+    }
+
+  return default_assemble_integer (x, size, aligned_p);
 }
 
 void
@@ -5367,6 +5446,13 @@ xtensa_conditional_register_usage (void)
      the return address has been saved.  */
   if (!TARGET_WINDOWED_ABI)
     fixed_regs[A0_REG] = 0;
+
+  /* In FDPIC mode A11 carries the called function's GOT value at
+     call sites.  Functions rely on it for their own GOT, so make it
+     callee-saved: the caller sets it up before each call and gets it
+     back unchanged afterwards.  */
+  if (TARGET_FDPIC)
+    call_used_regs[A11_REG] = 0;
 }
 
 /* Map hard register number to register class */
@@ -5534,7 +5620,8 @@ xtensa_delegitimize_address (rtx op)
       return xtensa_delegitimize_address (XEXP (op, 0));
 
     case UNSPEC:
-      if (XINT (op, 1) == UNSPEC_PLT)
+      if (XINT (op, 1) == UNSPEC_PLT
+	  || XINT (op, 1) == UNSPEC_FUNCDESC)
 	return XVECEXP(op, 0, 0);
       break;
 
