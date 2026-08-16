@@ -5364,6 +5364,23 @@ xtensa_legitimate_constant_p (machine_mode mode ATTRIBUTE_UNUSED, rtx x)
 	   || ! xtensa_postreload_completed_p ()
 	   || xtensa_simm12b (INTVAL (x));
 
+  /* FDPIC symbol addresses must go through the GOT: a literal pool
+     entry holding an absolute symbol address would require a runtime
+     relocation whose target is read-only RX storage, which the FDPIC
+     linker rejects.  Rejecting the constant here forces the movsi
+     expansion to load the address via the GOT (or GOTFUNCDESC) slot
+     instead of pooling it.  Function symbols are treated the same
+     way: the descriptor address is runtime-dependent, so it cannot
+     live in a read-only literal either.  */
+  if (TARGET_FDPIC && mode == Pmode)
+    {
+      rtx base, addend;
+
+      split_const (x, &base, &addend);
+      if (SYMBOL_REF_P (base))
+	return false;
+    }
+
   return !xtensa_tls_referenced_p (x);
 }
 
