@@ -1206,9 +1206,13 @@ xtensa_emit_move_sequence (rtx *operands, machine_mode mode)
 		(base, SYMBOL_REF_P (base) && SYMBOL_REF_FUNCTION_P (base));
 	      if (addend != const0_rtx)
 		{
+		  rtx addend_reg = force_reg (Pmode, addend);
 		  rtx sum = gen_reg_rtx (Pmode);
 
-		  emit_insn (gen_addsi3 (sum, src, addend));
+		  /* Materialize the addend and add it to the GOT slot
+		     address.  addsi3 only accepts add_operand immediates,
+		     so a register add keeps the RTL representable.  */
+		  emit_insn (gen_addsi3 (sum, src, addend_reg));
 		  src = sum;
 		}
 	      emit_move_insn (dst, src);
@@ -2517,10 +2521,15 @@ xtensa_legitimize_address (rtx x,
 
 	  if (addend != const0_rtx)
 	    {
+	      /* Materialize the addend and return PLUS(addr, addend_reg).
+		 Returning a bare register would drop the addition, while
+		 leaving a raw PLUS(reg, big-const) would be unrecognizable
+		 after expansion (addsi3 only accepts add_operand).  */
+	      rtx addend_reg = force_reg (Pmode, addend);
 	      rtx sum = gen_reg_rtx (Pmode);
 
-	      emit_insn (gen_addsi3 (sum, addr, addend));
-	      addr = sum;
+	      emit_insn (gen_addsi3 (sum, addr, addend_reg));
+	      return sum;
 	    }
 	  return addr;
 	}
