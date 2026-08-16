@@ -1294,24 +1294,42 @@
 ;; whose target is read-only RX storage.  Split every such move after
 ;; reload so no generation path can emit an absolute symbol address.
 (define_split
-  [(set (match_operand:SI 0 "nonimmed_operand")
+  [(set (match_operand:SI 0 "register_operand")
 	(match_operand:SI 1 "xtensa_fdpic_symbolic_operand"))]
   "TARGET_FDPIC && reload_completed"
-  [(clobber (match_scratch:SI 2 "&a"))]
+  [(const_int 0)]
   {
     rtx dst = operands[0];
-    rtx scratch = operands[2];
     rtx base, addend;
+    HOST_WIDE_INT a;
 
     split_const (operands[1], &base, &addend);
-    emit_insn (gen_rtx_SET (scratch, gen_sym_GOT (base)));
-    emit_insn (gen_addsi3 (scratch, scratch,
+    emit_insn (gen_rtx_SET (dst, gen_sym_GOT (base)));
+    emit_insn (gen_addsi3 (dst, dst,
 			   gen_rtx_REG (SImode, XTENSA_FDPIC_REGNUM)));
-    emit_insn (gen_rtx_SET (dst, gen_rtx_MEM (SImode, scratch)));
-    if (addend != const0_rtx)
+    emit_insn (gen_rtx_SET (dst, gen_rtx_MEM (SImode, dst)));
+    a = INTVAL (addend);
+    if (a != 0)
       {
-	emit_insn (gen_rtx_SET (scratch, addend));
-	emit_insn (gen_addsi3 (dst, dst, scratch));
+	/* Add the offset without a scratch register: one addmi for the
+	   simm8x256 part, then addi chunks for the remainder, both of
+	   which addsi3 can encode directly.  */
+	HOST_WIDE_INT m = (a / 256) * 256;
+	if (m != 0)
+	  {
+	    emit_insn (gen_addsi3 (dst, dst, GEN_INT (m)));
+	    a -= m;
+	  }
+	while (a != 0)
+	  {
+	    HOST_WIDE_INT part = a;
+	    if (part > 127)
+	      part = 127;
+	    else if (part < -128)
+	      part = -128;
+	    emit_insn (gen_addsi3 (dst, dst, GEN_INT (part)));
+	    a -= part;
+	  }
       }
     DONE;
   })
