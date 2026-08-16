@@ -1311,15 +1311,23 @@
     a = INTVAL (addend);
     if (a != 0)
       {
-	/* Add the offset without a scratch register: one addmi for the
-	   simm8x256 part, then addi chunks for the remainder, both of
-	   which addsi3 can encode directly.  */
+	/* Add the offset without a scratch register: addmi covers
+	   simm8x256 multiples up to 32512, addi covers the remaining
+	   simm8 chunks.  Both are encodable by addsi3 directly, so no
+	   temporary register is needed no matter how large the addend
+	   is.  */
 	HOST_WIDE_INT m = (a / 256) * 256;
-	if (m != 0)
+	while (m != 0)
 	  {
-	    emit_insn (gen_addsi3 (dst, dst, GEN_INT (m)));
-	    a -= m;
+	    HOST_WIDE_INT part = m;
+	    if (part > 32512)
+	      part = 32512;
+	    else if (part < -32512)
+	      part = -32512;
+	    emit_insn (gen_addsi3 (dst, dst, GEN_INT (part)));
+	    m -= part;
 	  }
+	a -= (a / 256) * 256;
 	while (a != 0)
 	  {
 	    HOST_WIDE_INT part = a;
