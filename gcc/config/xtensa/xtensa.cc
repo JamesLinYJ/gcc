@@ -2975,9 +2975,27 @@ xtensa_expand_load_force_l32 (rtx *operands, machine_mode dest_mode,
 /* Implement TARGET_CANNOT_FORCE_CONST_MEM.  */
 
 static bool
-xtensa_cannot_force_const_mem (machine_mode mode ATTRIBUTE_UNUSED, rtx x)
+xtensa_cannot_force_const_mem (machine_mode mode, rtx x)
 {
-  return xtensa_tls_referenced_p (x);
+  if (xtensa_tls_referenced_p (x))
+    return true;
+
+  /* FDPIC symbol addresses must never be spilled to the literal pool:
+     a pool entry holding an absolute symbol address would require a
+     runtime relocation whose target is read-only RX storage, which the
+     FDPIC linker rejects.  Refusing the spill makes emit_move_insn fall
+     back to the raw constant, which the movsi expansion loads through
+     the GOT (or GOTFUNCDESC) slot instead of a literal.  */
+  if (TARGET_FDPIC && mode == Pmode)
+    {
+      rtx base, addend;
+
+      split_const (x, &base, &addend);
+      if (SYMBOL_REF_P (base))
+	return true;
+    }
+
+  return false;
 }
 
 
