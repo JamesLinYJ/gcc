@@ -5378,7 +5378,7 @@ xtensa_trampoline_init (rtx m_tramp, tree fndecl, rtx chain)
    relocation whose target is read-only RX storage.  */
 
 bool
-xtensa_fdpic_symbolic_operand (rtx x, machine_mode mode)
+xtensa_fdpic_symbolic_operand_p (rtx x, machine_mode mode)
 {
   rtx base, addend;
 

@@ -17,6 +17,9 @@
 ;; along with GCC; see the file COPYING3.  If not see
 ;; <http://www.gnu.org/licenses/>.
 
+(define_predicate "xtensa_fdpic_symbolic_operand"
+  (match_test "xtensa_fdpic_symbolic_operand_p (op, mode)"))
+
 (define_predicate "add_operand"
   (ior (and (match_code "const_int")
 	    (match_test "xtensa_simm8 (INTVAL (op))

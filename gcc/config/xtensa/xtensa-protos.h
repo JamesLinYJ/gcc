@@ -35,7 +35,7 @@ extern bool xtensa_mem_offset (unsigned, machine_mode);
 #ifdef RTX_CODE
 extern int xt_true_regnum (rtx);
 extern int xtensa_valid_move (machine_mode, rtx *);
-extern bool xtensa_fdpic_symbolic_operand (rtx, machine_mode);
+extern bool xtensa_fdpic_symbolic_operand_p (rtx, machine_mode);
 extern bool smalloffset_address_p (const_rtx);
 extern bool constantpool_address_p (const_rtx);
 extern int constantpool_mem_p (rtx);
