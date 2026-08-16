@@ -5372,6 +5372,22 @@ xtensa_trampoline_init (rtx m_tramp, tree fndecl, rtx chain)
 		     LCT_NORMAL, VOIDmode, XEXP (m_tramp, 0), Pmode);
 }
 
+/* Return true if X is an FDPIC symbol reference, with or without an
+   addend.  Such references must be loaded through the GOT (or
+   GOTFUNCDESC) slot; an absolute address would need a runtime
+   relocation whose target is read-only RX storage.  */
+
+bool
+xtensa_fdpic_symbolic_operand (rtx x, machine_mode mode)
+{
+  rtx base, addend;
+
+  if (mode != VOIDmode && mode != Pmode)
+    return false;
+  split_const (x, &base, &addend);
+  return SYMBOL_REF_P (base) || LABEL_REF_P (base);
+}
+
 /* Implement TARGET_LEGITIMATE_CONSTANT_P.  */
 
 static bool

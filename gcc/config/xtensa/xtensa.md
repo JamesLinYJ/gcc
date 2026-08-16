@@ -1265,7 +1265,7 @@
     DONE;
 })
 
-(define_insn "movsi_internal"
+(define_insn_and_split "movsi_internal"
   [(set (match_operand:SI 0 "nonimmed_operand")
 	(match_operand:SI 1 "move_operand"))]
   "xtensa_valid_move (SImode, operands)"
@@ -1285,7 +1285,33 @@
      [*a, *A; rsr  , 3] rsr\t%0, ACCLO
      [*A, *r; wsr  , 3] wsr\t%1, ACCLO
   }
-  [(set_attr "mode" "SI")])
+  [(set_attr "mode" "SI")]
+  "&& TARGET_FDPIC && reload_completed
+   && xtensa_fdpic_symbolic_operand (operands[1], SImode)"
+  [(clobber (match_scratch:SI 2 "&a"))]
+  {
+    rtx dst = operands[0];
+    rtx scratch = operands[2];
+    rtx base, addend;
+
+    /* A bare symbol reference can reach movsi_internal through
+       late constant rematerialization, which does not go through
+       the movsi expander.  Under FDPIC the address must come from
+       the GOT: an absolute literal would need a runtime relocation
+       whose target is read-only RX storage.  Split such references
+       into the GOT load sequence.  */
+    split_const (operands[1], &base, &addend);
+    emit_insn (gen_rtx_SET (scratch, gen_sym_GOT (base)));
+    emit_insn (gen_addsi3 (scratch, scratch,
+			   gen_rtx_REG (SImode, XTENSA_FDPIC_REGNUM)));
+    emit_insn (gen_rtx_SET (dst, gen_rtx_MEM (SImode, scratch)));
+    if (addend != const0_rtx)
+      {
+	emit_insn (gen_rtx_SET (scratch, addend));
+	emit_insn (gen_addsi3 (dst, dst, scratch));
+      }
+    DONE;
+  })
 
 (define_insn "*xtensa_const16"
   [(set (match_operand:SI 0 "register_operand" "=a")
